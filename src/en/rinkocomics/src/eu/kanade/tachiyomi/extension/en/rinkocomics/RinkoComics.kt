@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.extension.en.rinkocomics
 
+import android.util.Base64
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -173,9 +174,8 @@ abstract class RinkoComics :
         }
 
         val document = client.get(getChapterUrl(chapter), Fetch.DOCUMENT).asJsoup()
-        val pages = document.select("img.chapter-image").mapIndexedNotNull { index, element ->
-            val imageUrl = element.attr("abs:data-src").ifBlank { element.attr("abs:src") }.trim()
-            if (imageUrl.isBlank()) return@mapIndexedNotNull null
+        val encoded = document.selectFirst("script#cwPages")?.data()?.trim().orEmpty()
+        val pages = decodePageUrls(encoded).mapIndexed { index, imageUrl ->
             Page(index, imageUrl = imageUrl)
         }
 
@@ -184,6 +184,17 @@ abstract class RinkoComics :
         }
 
         return pages
+    }
+
+    // The reader draws pages on canvases. Their URLs are a JSON list in #cwPages:
+    // base64, where the first 16 bytes are a XOR key for the rest.
+    private fun decodePageUrls(encoded: String): List<String> {
+        if (encoded.isEmpty()) return emptyList()
+        val raw = Base64.decode(encoded, Base64.DEFAULT)
+        val json = ByteArray(raw.size - KEY_SIZE) { i ->
+            (raw[i + KEY_SIZE].toInt() xor raw[i % KEY_SIZE].toInt()).toByte()
+        }
+        return json.decodeToString().parseAs<List<String>>()
     }
 
     override val supportsFilterFetching get() = true
@@ -377,6 +388,7 @@ abstract class RinkoComics :
         private const val LOCK_SUFFIX = "#lock"
         private const val CHAPTER_SELECTOR = "li.chapter"
         private const val CHAPTERS_PER_PAGE = 10
+        private const val KEY_SIZE = 16
         private val NONCE_REGEX = Regex(
             """comicworld_ajax\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"""",
         )
